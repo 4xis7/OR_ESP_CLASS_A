@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 MAC Config</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Courier New', monospace;
+    background: #0a0f1e;
+    color: #e0e8ff;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    gap: 16px;
+  }
+  .card {
+    background: #111827;
+    border: 1px solid #1e3a5f;
+    border-radius: 14px;
+    padding: 32px 28px 24px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .header { text-align: center; margin-bottom: 22px; }
+  .icon { font-size: 36px; display: block; margin-bottom: 8px; }
+  h1 { font-size: 16px; font-weight: 700; letter-spacing: 4px;
+       text-transform: uppercase; color: #38bdf8; margin-bottom: 3px; }
+  .subtitle { font-size: 10px; color: #4b6a8a; letter-spacing: 1px; }
+  .divider {
+    height: 1px;
+    background: linear-gradient(to right, transparent, #1e3a5f, transparent);
+    margin: 18px 0;
+  }
+  label { display: block; font-size: 10px; letter-spacing: 2px;
+          color: #4b6a8a; text-transform: uppercase; margin-bottom: 6px; }
+  input[type="text"] {
+    width: 100%; padding: 11px 13px;
+    background: #0d1520; border: 1px solid #1e3a5f;
+    border-radius: 8px; color: #38bdf8;
+    font-family: 'Courier New', monospace;
+    font-size: 16px; letter-spacing: 2px; outline: none;
+    transition: border-color .2s;
+    text-transform: uppercase;
+  }
+  input[type="text"]:focus { border-color: #38bdf8; }
+  input[type="text"]::placeholder { color: #243750; font-size: 12px; letter-spacing: 1px; }
+  input.error { border-color: #ef4444 !important; }
+  .btn {
+    width: 100%; margin-top: 16px; padding: 12px;
+    background: #0c4a6e; border: 1px solid #38bdf8;
+    border-radius: 8px; color: #38bdf8;
+    font-family: 'Courier New', monospace;
+    font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+    cursor: pointer; transition: background .2s;
+  }
+  .btn:hover { background: #075985; }
+  .btn-danger {
+    background: #2d0606; border-color: #ef4444;
+    color: #ef4444; margin-top: 8px;
+  }
+  .btn-danger:hover { background: #450a0a; }
+  #toast {
+    display: none; margin-top: 12px; padding: 9px 13px;
+    border-radius: 8px; font-size: 11px; border: 1px solid; text-align: center;
+  }
+  #toast.ok  { background: #052e16; border-color: #22c55e; color: #22c55e; }
+  #toast.err { background: #2d0606; border-color: #ef4444; color: #ef4444; }
+  .ap-badge {
+    display: flex; align-items: center; justify-content: center;
+    gap: 6px; margin-top: 18px;
+    font-size: 10px; color: #4b6a8a;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+
+  /* MAC Panel */
+  .mac-panel {
+    width: 100%; max-width: 420px;
+    background: #111827; border: 1px solid #1e3a5f;
+    border-radius: 10px; padding: 14px 18px;
+  }
+  .mac-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .mac-title { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #4b6a8a; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+       color: #4b6a8a; padding: 4px 0; text-align: left; }
+  td { padding: 7px 0; color: #38bdf8; border-top: 1px solid #151e30; }
+  td:first-child { color: #4b6a8a; width: 28px; }
+  .mac-empty { font-size: 11px; color: #4b6a8a; text-align: center; padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="header">
+    <span class="icon">📡</span>
+    <h1>ESP32 MAC Config</h1>
+    <p class="subtitle">Access Point Mode</p>
+  </div>
+  <div class="divider"></div>
+
+  <label>MAC Address</label>
+  <input type="text" id="macInput"
+         placeholder="C4:D8:D5:95:A7:D8"
+         maxlength="17" autocomplete="off" spellcheck="false">
+
+  <div id="toast"></div>
+  <button class="btn" onclick="doSave()">💾 SAVE MAC</button>
+
+  <div class="ap-badge">
+    <div class="dot"></div>
+    <span>ESP32_Config &nbsp;|&nbsp; 192.168.4.1</span>
+  </div>
+</div>
+
+<div class="mac-panel">
+  <div class="mac-panel-header">
+    <span class="mac-title">📋 MAC ที่บันทึกใน NVS</span>
+    <button class="btn btn-danger" style="width:auto;padding:4px 12px;font-size:9px;"
+            onclick="doClear()">🗑 ล้าง</button>
+  </div>
+  <table>
+    <tr><th>#</th><th>MAC Address</th></tr>
+  </table>
+  <div id="macBody"></div>
+</div>
+
+<script>
+  function isValidMAC(mac) {
+    return /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac);
+  }
+
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = type;
+    t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', 3000);
+  }
+
+  // Auto-format MAC
+  document.getElementById('macInput').addEventListener('input', function () {
+    let v = this.value.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+    let f = v.match(/.{1,2}/g)?.join(':') || v;
+    if (f.length > 17) f = f.slice(0, 17);
+    this.value = f;
+  });
+  document.getElementById('macInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doSave();
+  });
+
+  async function doSave() {
+    const mac = document.getElementById('macInput').value.trim().toUpperCase();
+    if (!isValidMAC(mac)) {
+      showToast('⚠ MAC ไม่ถูกต้อง เช่น C4:D8:D5:95:A7:D8', 'err');
+      return;
+    }
+    try {
+      const res  = await fetch('/save?mac=' + encodeURIComponent(mac));
+      const data = await res.json();
+      if (data.status === 'saved') {
+        showToast('✓ บันทึก: ' + data.mac, 'ok');
+        document.getElementById('macInput').value = '';
+        loadMACs();
+      } else {
+        showToast('✗ ' + (data.error || 'ผิดพลาด'), 'err');
+      }
+    } catch (e) {
+      showToast('✗ เชื่อมต่อไม่ได้', 'err');
+    }
+  }
+
+  async function loadMACs() {
+    try {
+      const res  = await fetch('/mac');
+      const data = await res.json();
+      const body = document.getElementById('macBody');
+      if (!data.macs || data.macs.length === 0) {
+        body.innerHTML = '<p class="mac-empty">ยังไม่มีข้อมูล</p>';
+      } else {
+        body.innerHTML = data.macs.map((mac, i) =>
+          `<table><tr><td>${i}</td><td>${mac}</td></tr></table>`
+        ).join('');
+      }
+    } catch (e) {
+      document.getElementById('macBody').innerHTML =
+        '<p class="mac-empty">โหลดไม่ได้</p>';
+    }
+  }
+
+  async function doClear() {
+    if (!confirm('ลบ MAC ทั้งหมด?')) return;
+    try {
+      await fetch('/mac', { method: 'DELETE' });
+      showToast('✓ ล้างแล้ว', 'ok');
+      loadMACs();
+    } catch (e) {
+      showToast('✗ ล้างไม่สำเร็จ', 'err');
+    }
+  }
+
+  // โหลดตอนเปิดหน้า
+  loadMACs();
+</script>
+</body>
+</html>

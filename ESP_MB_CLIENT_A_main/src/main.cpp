@@ -1,277 +1,412 @@
 #include <Arduino.h>
-//Client A of MB01 GPS
-#include "WiFi.h"
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
 #include <esp_now.h>
 #include <TinyGPS++.h>
-#include <ArduinoJson.h>
+#include <LittleFS.h>
 
-//#define RXD2 16 //iTSD 
-//#define TXD2 17 //iTSD
-//#define RXD1 18 //Readout
-//#define TXD1 19 //Readout
+// =====================================================
+// PIN
+// =====================================================
 
-#define RXD1 16 //Readout 
-#define TXD1 17 //Readout
-#define RXD2 26 //GPS
-#define TXD2 22 //GPS
+#define RXD1 16
+#define TXD1 17
+
+#define RXD2 26
+#define TXD2 22
+
+const int LED_wifi = 5;
+const int LED_RS   = 19;
+const int LED_TTL  = 18;
+
+// =====================================================
+// AP CONFIG
+// =====================================================
+
+const char* AP_SSID     = "ESP32_CONFIG";
+const char* AP_PASSWORD = "12345678";
+
+// =====================================================
+// GLOBAL
+// =====================================================
+
 TinyGPSPlus gps;
-
-uint8_t broadcastAddress_server[] = {0x58,0xbf,0x25,0xba,0x88,0xe8}; // Comp node
+WebServer   server(80);
+Preferences prefs;
 
 TaskHandle_t Task1;
 TaskHandle_t Task2;
 
-// 👉 เพิ่มตรงนี้
 void Task1code(void * pvParameters);
 void Task2code(void * pvParameters);
 void gps_to_iot();
 
+uint8_t          peerMac[6];
+bool             peerReady = false;
 esp_now_peer_info_t peerInfo;
 
-// ================== ✅ LED ==================
-const int LED_wifi = 5;
-const int LED_RS   = 19;
-const int LED_TTL  = 18;
-//LED4
-const int LED_power = 12;
+// =====================================================
+// ตรวจสอบ MAC Format
+// =====================================================
 
-// ===========================================
-
-// ================== ✅ แก้เฉพาะนี้ ==================
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
- 
-  if (status == ESP_NOW_SEND_SUCCESS){
-    Serial.println("OK");  
-    digitalWrite(LED_wifi, HIGH);   // 🔥 ติดค้าง
-  }
-  else{
-    Serial.println("FAIL");  
-    digitalWrite(LED_wifi, LOW);    // 🔥 ดับ
-  }
-}
-// ===================================================
-
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  
-  String dataIn;
-  
-  for (int i=0;i<len;i++) {
-    dataIn += (char)incomingData[i];
-  }
-
-  if(dataIn == "gps" || dataIn == "GPS"){
-    Serial.println("GPS True");
-    gps_to_iot();
-  } else {
-    Serial.println("Else cond.");
-    gps_to_iot();
-  }
-
-  Serial.print(dataIn);
-  Serial1.print(dataIn);
-  Serial.flush();
-  
-}
-
-void displayInfo()
+bool isValidMac(String mac)
 {
-  DynamicJsonDocument doc(1024);
-  doc["sensor"] = "gps";
+    mac.toUpperCase();
 
-  Serial.print(F("Location: ")); 
-  if (gps.location.isValid())
-  {
-    Serial.print(gps.location.lat(), 6);
-    Serial.print(F(","));
-    Serial.print(gps.location.lng(), 6);
+    if (mac.length() != 17)
+        return false;
 
-    String pos = "lat:";
-    pos.concat(String(gps.location.lat()));
-    pos.concat("lng");
-    pos.concat(String(gps.location.lng()));
+    for (int i = 0; i < 17; i++)
+    {
+        if (i == 2 || i == 5 || i == 8 ||
+            i == 11 || i == 14)
+        {
+            if (mac[i] != ':')
+                return false;
+        }
+        else
+        {
+            if (!isxdigit(mac[i]))
+                return false;
+        }
+    }
 
-    Serial.println(pos);
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-  }
-
-  Serial.print(F("  Date/Time: "));
-  if (gps.date.isValid())
-  {
-    Serial.print(gps.date.month());
-    Serial.print(F("/"));
-    Serial.print(gps.date.day());
-    Serial.print(F("/"));
-    Serial.print(gps.date.year());
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-  }
-
-  Serial.print(F(" "));
-  if (gps.time.isValid())
-  {
-    if (gps.time.hour() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.hour());
-    Serial.print(F(":"));
-    if (gps.time.minute() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.minute());
-    Serial.print(F(":"));
-    if (gps.time.second() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.second());
-    Serial.print(F("."));
-    if (gps.time.centisecond() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.centisecond());
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-  }
-
-  Serial.println();
+    return true;
 }
 
-// ================== GPS ==================
+// =====================================================
+// MAC STRING -> BYTE
+// =====================================================
+
+bool macStringToBytes(String macStr, uint8_t *mac)
+{
+    if (macStr.length() != 17)
+        return false;
+
+    int values[6];
+
+    if (sscanf(macStr.c_str(),
+               "%x:%x:%x:%x:%x:%x",
+               &values[0], &values[1],
+               &values[2], &values[3],
+               &values[4], &values[5]) != 6)
+    {
+        return false;
+    }
+
+    for (int i = 0; i < 6; ++i)
+        mac[i] = (uint8_t)values[i];
+
+    return true;
+}
+
+// =====================================================
+// LOAD PEER MAC จาก NVS
+// =====================================================
+
+void loadPeer()
+{
+    prefs.begin("config", true);
+    String macStr = prefs.getString("peer", "");
+    prefs.end();
+
+    if (macStr == "")
+    {
+        Serial.println("NO PEER");
+        return;
+    }
+
+    Serial.print("PEER = ");
+    Serial.println(macStr);
+
+    if (!macStringToBytes(macStr, peerMac))
+    {
+        Serial.println("INVALID MAC");
+        return;
+    }
+
+    memcpy(peerInfo.peer_addr, peerMac, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+
+    if (esp_now_add_peer(&peerInfo) == ESP_OK)
+    {
+        Serial.println("PEER ADDED");
+        peerReady = true;
+    }
+    else
+    {
+        Serial.println("ADD PEER FAIL");
+    }
+}
+
+// =====================================================
+// WEB: สร้างหน้าจาก index.html ใน LittleFS
+// แทรก THIS MAC และ MASTER MAC ก่อนส่ง
+// =====================================================
+
+void handleRoot()
+{
+    if (!LittleFS.exists("/index.html"))
+    {
+        server.send(404, "text/plain", "index.html not found");
+        return;
+    }
+
+    File f = LittleFS.open("/index.html", "r");
+    String html = "";
+    while (f.available())
+        html += (char)f.read();
+    f.close();
+
+    prefs.begin("config", true);
+    String savedPeer = prefs.getString("peer", "NOT SET");
+    prefs.end();
+
+    html.replace("%MY_MAC%",   WiFi.macAddress());
+    html.replace("%PEER_MAC%", savedPeer);
+
+    server.send(200, "text/html", html);
+}
+
+void handleSave()
+{
+    if (!server.hasArg("mac"))
+    {
+        server.send(400, "text/plain", "No MAC");
+        return;
+    }
+
+    String mac = server.arg("mac");
+    mac.trim();
+    mac.toUpperCase();
+
+    if (!isValidMac(mac))
+    {
+        server.send(200, "text/html",
+            "<p>Invalid MAC Format</p>"
+            "<a href='/'>Back</a>");
+        return;
+    }
+
+    prefs.begin("config", false);
+    prefs.putString("peer", mac);
+    prefs.end();
+
+    Serial.println("MAC SAVED: " + mac);
+
+    server.sendHeader("Location", "/");
+    server.send(302, "text/plain", "");
+}
+
+void handleRestart()
+{
+    server.send(200, "text/plain", "RESTARTING");
+    delay(1000);
+    ESP.restart();
+}
+
+// =====================================================
+// ESP-NOW SEND CALLBACK
+// =====================================================
+
+void OnDataSent(const uint8_t *mac_addr,
+                esp_now_send_status_t status)
+{
+    if (status == ESP_NOW_SEND_SUCCESS)
+    {
+        Serial.println("OK");
+        digitalWrite(LED_wifi, HIGH);
+    }
+    else
+    {
+        Serial.println("FAIL");
+        digitalWrite(LED_wifi, LOW);
+    }
+}
+
+// =====================================================
+// ESP-NOW RECEIVE CALLBACK
+// =====================================================
+
+void OnDataRecv(const uint8_t *mac,
+                const uint8_t *incomingData,
+                int len)
+{
+    String dataIn = "";
+
+    for (int i = 0; i < len; i++)
+        dataIn += (char)incomingData[i];
+
+    gps_to_iot();
+
+    Serial.print(dataIn);
+    Serial1.print(dataIn);
+    Serial.flush();
+}
+
+// =====================================================
+// GPS -> ส่ง ESP-NOW
+// =====================================================
+
 void gps_to_iot()
 {
-  DynamicJsonDocument doc(1024);
-  doc["sensor"] = "gps";
-  String msg;
-  
-  Serial.print(F("Location: ")); 
-  if (gps.location.isValid())
-  {
-    String pos = "{\"lat\":";
-    pos.concat(String(gps.location.lat(), 6));
-    pos.concat(",\"lng\":");
-    pos.concat(String(gps.location.lng(), 6));
-    pos.concat("}");
+    String msg;
 
-    Serial.println(pos);
-    msg = pos;
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-    String pos = "{\"lat\":\"INVALID\",\"lng\":\"INVALID\"}";
-    Serial.println(pos);
-    msg = pos;
-  }
-
-  String data_send = "MB1L:" + msg + "\r\n";
-  esp_now_send(broadcastAddress_server, (uint8_t*)data_send.c_str(), data_send.length());
-  delay(100);
-}
-
-// ================== SETUP ==================
-void setup(){
-  pinMode(2 , OUTPUT);
-  pinMode(4 , OUTPUT);
-pinMode(LED_power, OUTPUT);
-  digitalWrite(LED_power, HIGH);
-  // ✅ เพิ่ม LED
-  pinMode(LED_wifi, OUTPUT);
-  pinMode(LED_RS, OUTPUT);
-  pinMode(LED_TTL, OUTPUT);
-
-  digitalWrite(LED_wifi, LOW);
-  digitalWrite(LED_RS, LOW);
-  digitalWrite(LED_TTL, LOW);
-
-  Serial.begin(9600);
-  Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
-  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-  
-  WiFi.mode(WIFI_STA);
-  Serial.println(WiFi.macAddress());
-
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("Error initializing ESP-NOW");
-    return;
-  }
-
-  esp_now_register_send_cb(OnDataSent);
-  esp_now_register_recv_cb(OnDataRecv);
-
-  memcpy(peerInfo.peer_addr, broadcastAddress_server, 6);
-  peerInfo.channel = 0;  
-  peerInfo.encrypt = false;
-  
-  if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    Serial.println("Failed to add peer");
-    return;
-  }
-
-  xTaskCreatePinnedToCore(Task1code, "Task1", 10000, NULL, 0, &Task1, 0);
-  
-
-  xTaskCreatePinnedToCore(Task2code, "Task2", 10000, NULL, 0, &Task2, 1);
-
-}
-
-// ================== TASK1 ==================
-void Task1code( void * pvParameters ){
-
-  Serial.print("Task1 running on core ");
-  Serial.println(xPortGetCoreID());
-
-  for(;;){
-
-    if(Serial1.available() > 0){
-
-      digitalWrite(LED_RS, HIGH);   // 🔥 ติด
-
-      String msg = Serial1.readStringUntil('\r');
-
-      digitalWrite(LED_RS, LOW);    // 🔥 ดับ
-
-      String data_send = "MB1L:" + msg + "\r\n";
-      esp_now_send( broadcastAddress_server, (uint8_t*)data_send.c_str(), data_send.length());
-      delay(100);
+    if (gps.location.isValid())
+    {
+        String pos = "{\"lat\":";
+        pos.concat(String(gps.location.lat(), 6));
+        pos.concat(",\"lng\":");
+        pos.concat(String(gps.location.lng(), 6));
+        pos.concat("}");
+        msg = pos;
+    }
+    else
+    {
+        msg = "{\"lat\":\"INVALID\",\"lng\":\"INVALID\"}";
     }
 
-    if(Serial.available() > 0){
-      String msgWire = Serial.readStringUntil('\r');
-      String data_send = "MB1L:" + msgWire + "\r\n";
-      esp_now_send( broadcastAddress_server, (uint8_t*)data_send.c_str(), data_send.length());
-      delay(100);
+    String data_send = "MB1L:" + msg + "\r\n";
+
+    if (peerReady)
+    {
+        esp_now_send(peerMac,
+                     (uint8_t*)data_send.c_str(),
+                     data_send.length());
     }
-  } 
-  delay(10);
+
+    delay(100);
 }
 
-// ================== TASK2 ==================
-void Task2code( void * pvParameters ){
+// =====================================================
+// SETUP
+// =====================================================
 
-  Serial.print("Task2 running on core ");
-  Serial.println(xPortGetCoreID());
+void setup()
+{
+    pinMode(LED_wifi, OUTPUT);
+    pinMode(LED_RS,   OUTPUT);
+    pinMode(LED_TTL,  OUTPUT);
 
-  for(;;){
+    digitalWrite(LED_wifi, LOW);
+    digitalWrite(LED_RS,   LOW);
+    digitalWrite(LED_TTL,  LOW);
 
-    
+    Serial.begin(9600);
+    Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
+    Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
 
-    while (Serial2.available() > 0){
+    if (!LittleFS.begin(true))
+        Serial.println("LittleFS ERROR");
 
-      digitalWrite(LED_TTL, HIGH);   // 🔥 ติด
+    WiFi.mode(WIFI_STA);
+    Serial.println(WiFi.macAddress());
 
-      if (gps.encode(Serial2.read()))
-        displayInfo();
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    Serial.println("CONFIG MODE");
+    Serial.println(WiFi.softAPIP());
 
-      digitalWrite(LED_TTL, LOW);    // 🔥 ดับ
+    server.on("/",        HTTP_GET,  handleRoot);
+    server.on("/save",    HTTP_POST, handleSave);
+    server.on("/restart", HTTP_POST, handleRestart);
+    server.begin();
+
+    if (esp_now_init() != ESP_OK)
+    {
+        Serial.println("ESP NOW ERROR");
+        return;
     }
 
-    if (millis() > 5000 && gps.charsProcessed() < 10){
-      Serial.println(F("No GPS detected: check wiring."));
-    }
-  }
+    esp_now_register_send_cb(OnDataSent);
+    esp_now_register_recv_cb(OnDataRecv);
 
-  delay(10);
+    loadPeer();
+
+    xTaskCreatePinnedToCore(
+        Task1code, "Task1",
+        10000, NULL, 0, &Task1, 0
+    );
+
+    xTaskCreatePinnedToCore(
+        Task2code, "Task2",
+        10000, NULL, 0, &Task2, 1
+    );
 }
 
-// ================== LOOP ==================
-void loop(){
-  delay(100);
+// =====================================================
+// TASK1 - Serial Relay -> ESP-NOW
+// =====================================================
+
+void Task1code(void * pvParameters)
+{
+    for (;;)
+    {
+        if (Serial1.available() > 0)
+        {
+            digitalWrite(LED_RS, HIGH);
+
+            String msg = Serial1.readStringUntil('\r');
+
+            digitalWrite(LED_RS, LOW);
+
+            String data_send = "MB1L:" + msg + "\r\n";
+
+            if (peerReady)
+                esp_now_send(peerMac,
+                             (uint8_t*)data_send.c_str(),
+                             data_send.length());
+
+            delay(100);
+        }
+
+        if (Serial.available() > 0)
+        {
+            String msgWire = Serial.readStringUntil('\r');
+
+            String data_send = "MB1L:" + msgWire + "\r\n";
+
+            if (peerReady)
+                esp_now_send(peerMac,
+                             (uint8_t*)data_send.c_str(),
+                             data_send.length());
+
+            delay(100);
+        }
+
+        server.handleClient();
+    }
+}
+
+// =====================================================
+// TASK2 - GPS Decode
+// =====================================================
+
+void Task2code(void * pvParameters)
+{
+    for (;;)
+    {
+        while (Serial2.available() > 0)
+        {
+            digitalWrite(LED_TTL, HIGH);
+            gps.encode(Serial2.read());
+            digitalWrite(LED_TTL, LOW);
+        }
+
+        if (millis() > 5000 &&
+            gps.charsProcessed() < 10)
+        {
+            Serial.println("No GPS detected");
+        }
+    }
+}
+
+// =====================================================
+// LOOP
+// =====================================================
+
+void loop()
+{
+    delay(100);
 }
