@@ -4,7 +4,7 @@
 #include <Preferences.h>
 #include <esp_now.h>
 #include <TinyGPS++.h>
-#include <LittleFS.h>
+#include <SPIFFS.h>
 
 // =====================================================
 // PIN
@@ -142,19 +142,19 @@ void loadPeer()
 }
 
 // =====================================================
-// WEB: สร้างหน้าจาก index.html ใน LittleFS
+// WEB: สร้างหน้าจาก index.html ใน SPIFFS 
 // แทรก THIS MAC และ MASTER MAC ก่อนส่ง
 // =====================================================
 
 void handleRoot()
 {
-    if (!LittleFS.exists("/index.html"))
+    if (!SPIFFS .exists("/index.html"))
     {
         server.send(404, "text/plain", "index.html not found");
         return;
     }
 
-    File f = LittleFS.open("/index.html", "r");
+    File f = SPIFFS .open("/index.html", "r");
     String html = "";
     while (f.available())
         html += (char)f.read();
@@ -298,8 +298,8 @@ void setup()
     Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
     Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
 
-    if (!LittleFS.begin(true))
-        Serial.println("LittleFS ERROR");
+    if (!SPIFFS .begin(true))
+        Serial.println("SPIFFS  ERROR");
 
     WiFi.mode(WIFI_STA);
     Serial.println(WiFi.macAddress());
