@@ -24,7 +24,7 @@ const int LED_TTL  = 18;
 // AP CONFIG
 // =====================================================
 
-const char* AP_SSID     = "ESP32_CONFIG";
+const char* AP_SSID     = "ESP32_CONFIG_A";
 const char* AP_PASSWORD = "12345678";
 
 // =====================================================
