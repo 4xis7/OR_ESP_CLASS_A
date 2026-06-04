@@ -42,8 +42,8 @@ void Task1code(void * pvParameters);
 void Task2code(void * pvParameters);
 void gps_to_iot();
 
-uint8_t          peerMac[6];
-bool             peerReady = false;
+uint8_t           peerMac[6];
+bool              peerReady = false;
 esp_now_peer_info_t peerInfo;
 
 // =====================================================
@@ -148,13 +148,13 @@ void loadPeer()
 
 void handleRoot()
 {
-    if (!SPIFFS .exists("/index.html"))
+    if (!SPIFFS.exists("/index.html"))
     {
         server.send(404, "text/plain", "index.html not found");
         return;
     }
 
-    File f = SPIFFS .open("/index.html", "r");
+    File f = SPIFFS.open("/index.html", "r");
     String html = "";
     while (f.available())
         html += (char)f.read();
@@ -298,15 +298,21 @@ void setup()
     Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
     Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
 
-    if (!SPIFFS .begin(true))
-        Serial.println("SPIFFS  ERROR");
+    if (!SPIFFS.begin(true))
+        Serial.println("SPIFFS ERROR");
 
-    WiFi.mode(WIFI_STA);
+    // แก้ไขจุดที่ 1: เปลี่ยนโหมดเป็น WIFI_AP_STA เพื่อให้ใช้งาน ESP-NOW และปล่อย Wi-Fi Config ได้พร้อมกัน
+    WiFi.mode(WIFI_AP_STA);
+    Serial.print("STA MAC Address: ");
     Serial.println(WiFi.macAddress());
 
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
-    Serial.println("CONFIG MODE");
-    Serial.println(WiFi.softAPIP());
+    if (WiFi.softAP(AP_SSID, AP_PASSWORD)) {
+        Serial.println("CONFIG MODE ENABLED");
+        Serial.print("AP IP Address: ");
+        Serial.println(WiFi.softAPIP());
+    } else {
+        Serial.println("SoftAP Failed to Start!");
+    }
 
     server.on("/",        HTTP_GET,  handleRoot);
     server.on("/save",    HTTP_POST, handleSave);
@@ -376,6 +382,9 @@ void Task1code(void * pvParameters)
         }
 
         server.handleClient();
+        
+        // แก้ไขจุดที่ 2: เพิ่ม delay สั้นๆ เพื่อคืนเวลาให้ CPU หลังบ้านจัดการ Wi-Fi
+        delay(10); 
     }
 }
 
@@ -385,6 +394,8 @@ void Task1code(void * pvParameters)
 
 void Task2code(void * pvParameters)
 {
+    unsigned long lastGpsCheck = millis();
+    
     for (;;)
     {
         while (Serial2.available() > 0)
@@ -394,11 +405,18 @@ void Task2code(void * pvParameters)
             digitalWrite(LED_TTL, LOW);
         }
 
-        if (millis() > 5000 &&
-            gps.charsProcessed() < 10)
+        // ปรับปรุงเงื่อนไขแจ้งเตือนไม่ให้รันถี่เกินไปจนค้าง
+        if (millis() - lastGpsCheck > 5000)
         {
-            Serial.println("No GPS detected");
+            lastGpsCheck = millis();
+            if (gps.charsProcessed() < 10)
+            {
+                Serial.println("No GPS detected");
+            }
         }
+        
+        // แก้ไขจุดที่ 3: เพิ่ม delay สั้นๆ ป้องกัน CPU ใช้งานเกิน 100% (Watchdog reset)
+        delay(10); 
     }
 }
 
