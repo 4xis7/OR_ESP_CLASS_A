@@ -38,6 +38,8 @@ Preferences prefs;
 TaskHandle_t Task1;
 TaskHandle_t Task2;
 
+unsigned long lastGpsData = 0;
+
 void Task1code(void * pvParameters);
 void Task2code(void * pvParameters);
 void gps_to_iot();
@@ -394,32 +396,81 @@ void Task1code(void * pvParameters)
 
 void Task2code(void * pvParameters)
 {
-    unsigned long lastGpsCheck = millis();
-    
+    unsigned long lastPrint = millis();
+
     for (;;)
     {
         while (Serial2.available() > 0)
         {
-            digitalWrite(LED_TTL, HIGH);
             gps.encode(Serial2.read());
-            digitalWrite(LED_TTL, LOW);
+            lastGpsData = millis();
         }
 
-        // ปรับปรุงเงื่อนไขแจ้งเตือนไม่ให้รันถี่เกินไปจนค้าง
-        if (millis() - lastGpsCheck > 5000)
+        if (millis() - lastPrint > 1000)
         {
-            lastGpsCheck = millis();
-            if (gps.charsProcessed() < 10)
+            lastPrint = millis();
+
+            if (millis() - lastGpsData > 1000)
             {
                 Serial.println("No GPS detected");
             }
+            else
+            {
+                Serial.print("Location: ");
+
+                if (gps.location.isValid())
+                {
+                    Serial.print(gps.location.lat(), 6);
+                    Serial.print(",");
+                    Serial.print(gps.location.lng(), 6);
+                }
+                else
+                {
+                    Serial.print("INVALID");
+                }
+
+                Serial.print("  Date/Time: ");
+
+                if (gps.date.isValid() && gps.time.isValid())
+                {
+                    Serial.print(gps.date.day());
+                    Serial.print("/");
+                    Serial.print(gps.date.month());
+                    Serial.print("/");
+                    Serial.print(gps.date.year());
+
+                    Serial.print(" ");
+
+                    if (gps.time.hour() < 10) Serial.print("0");
+                    Serial.print(gps.time.hour());
+
+                    Serial.print(":");
+
+                    if (gps.time.minute() < 10) Serial.print("0");
+                    Serial.print(gps.time.minute());
+
+                    Serial.print(":");
+
+                    if (gps.time.second() < 10) Serial.print("0");
+                    Serial.print(gps.time.second());
+
+                    Serial.print(".");
+
+                    if (gps.time.centisecond() < 10) Serial.print("0");
+                    Serial.print(gps.time.centisecond());
+                }
+                else
+                {
+                    Serial.print("0/0/2000 00:00:00.00");
+                }
+
+                Serial.println();
+            }
         }
-        
-        // แก้ไขจุดที่ 3: เพิ่ม delay สั้นๆ ป้องกัน CPU ใช้งานเกิน 100% (Watchdog reset)
-        delay(10); 
+
+        delay(10);
     }
 }
-
 // =====================================================
 // LOOP
 // =====================================================
