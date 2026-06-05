@@ -441,8 +441,15 @@ void Task2code(void * pvParameters)
 
                     Serial.print(" ");
 
-                    if (gps.time.hour() < 10) Serial.print("0");
-                    Serial.print(gps.time.hour());
+                    int thaiHour = gps.time.hour() + 7;
+
+                    if (thaiHour >= 24)
+                    {
+                        thaiHour -= 24;
+                    }
+
+                    if (thaiHour < 10) Serial.print("0");
+                    Serial.print(thaiHour);
 
                     Serial.print(":");
 
@@ -453,7 +460,7 @@ void Task2code(void * pvParameters)
 
                     if (gps.time.second() < 10) Serial.print("0");
                     Serial.print(gps.time.second());
-
+                    
                     Serial.print(".");
 
                     if (gps.time.centisecond() < 10) Serial.print("0");
