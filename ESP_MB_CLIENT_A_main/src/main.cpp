@@ -16,9 +16,12 @@
 #define RXD2 26
 #define TXD2 22
 
+#define BTN_CONFIG 35
+
 const int LED_wifi = 5;
 const int LED_RS   = 19;
 const int LED_TTL  = 18;
+const int LED_POWER = 12;
 
 // =====================================================
 // AP CONFIG
@@ -39,6 +42,8 @@ TaskHandle_t Task1;
 TaskHandle_t Task2;
 
 unsigned long lastGpsData = 0;
+unsigned long rsLedTimer  = 0;
+unsigned long gpsLedTimer = 0;
 
 void Task1code(void * pvParameters);
 void Task2code(void * pvParameters);
@@ -101,6 +106,21 @@ bool macStringToBytes(String macStr, uint8_t *mac)
         mac[i] = (uint8_t)values[i];
 
     return true;
+}
+
+// =====================================================
+// ตรวจสอบว่ามี MAC หรือไม่
+// =====================================================
+
+bool hasPeerSaved()
+{
+    prefs.begin("config", true);
+
+    String macStr = prefs.getString("peer", "");
+
+    prefs.end();
+
+    return (macStr.length() == 17);
 }
 
 // =====================================================
@@ -198,8 +218,14 @@ void handleSave()
 
     Serial.println("MAC SAVED: " + mac);
 
-    server.sendHeader("Location", "/");
-    server.send(302, "text/plain", "");
+    server.send(200,
+                "text/html",
+                "<h2>MAC SAVED</h2>"
+                "<p>Restarting...</p>");
+
+    delay(1000);
+
+    ESP.restart();
 }
 
 void handleRestart()
@@ -232,6 +258,10 @@ void OnDataSent(const uint8_t *mac_addr,
 // ESP-NOW RECEIVE CALLBACK
 // =====================================================
 
+// =====================================================
+// ESP-NOW RECEIVE CALLBACK  (แก้ไข)
+// =====================================================
+
 void OnDataRecv(const uint8_t *mac,
                 const uint8_t *incomingData,
                 int len)
@@ -241,13 +271,38 @@ void OnDataRecv(const uint8_t *mac,
     for (int i = 0; i < len; i++)
         dataIn += (char)incomingData[i];
 
-    gps_to_iot();
+    dataIn.trim();  // ตัด \r \n และ space ออก
 
-    Serial.print(dataIn);
-    Serial1.print(dataIn);
-    Serial.flush();
+    Serial.print("RECV: ");
+    Serial.println(dataIn);
+
+    // ตรวจสอบคำสั่ง "gps" (case-insensitive)
+    if (dataIn.equalsIgnoreCase("gps"))
+    {
+        // บันทึก MAC ของ Master ที่ส่งคำสั่งมา
+        // เพื่อส่งกลับไปหาต้นทางโดยตรง
+        memcpy(peerMac, mac, 6);
+
+        // เพิ่ม peer ชั่วคราวถ้ายังไม่มี
+        if (!esp_now_is_peer_exist(mac))
+        {
+            esp_now_peer_info_t tmpPeer;
+            memcpy(tmpPeer.peer_addr, mac, 6);
+            tmpPeer.channel = 0;
+            tmpPeer.encrypt = false;
+            esp_now_add_peer(&tmpPeer);
+        }
+
+        gps_to_iot();  // ส่งพิกัดกลับ
+    }
+    else
+    {
+        // ข้อมูลอื่น → relay ต่อไปยัง Serial1 เหมือนเดิม
+        Serial.print(dataIn);
+        Serial1.print(dataIn);
+        Serial.flush();
+    }
 }
-
 // =====================================================
 // GPS -> ส่ง ESP-NOW
 // =====================================================
@@ -281,6 +336,32 @@ void gps_to_iot()
 
     delay(100);
 }
+// =====================================================
+// button_Web Config
+// =====================================================
+
+void startConfigMode()
+{
+    WiFi.mode(WIFI_AP_STA);
+
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+
+    Serial.println("CONFIG MODE ENABLED");
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/save", HTTP_POST, handleSave);
+    server.on("/restart", HTTP_POST, handleRestart);
+
+    server.begin();
+
+    while (true)
+    {
+        server.handleClient();
+        delay(10);
+    }
+}
 
 // =====================================================
 // SETUP
@@ -291,10 +372,14 @@ void setup()
     pinMode(LED_wifi, OUTPUT);
     pinMode(LED_RS,   OUTPUT);
     pinMode(LED_TTL,  OUTPUT);
+    pinMode(LED_POWER, OUTPUT);
+    
+    pinMode(BTN_CONFIG, INPUT_PULLUP);
 
     digitalWrite(LED_wifi, LOW);
     digitalWrite(LED_RS,   LOW);
     digitalWrite(LED_TTL,  LOW);
+    digitalWrite(LED_POWER, HIGH);
 
     Serial.begin(9600);
     Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
@@ -303,23 +388,18 @@ void setup()
     if (!SPIFFS.begin(true))
         Serial.println("SPIFFS ERROR");
 
+    if (!hasPeerSaved())
+    {
+        Serial.println("NO MASTER MAC");
+
+        startConfigMode();
+    }   
+
     // แก้ไขจุดที่ 1: เปลี่ยนโหมดเป็น WIFI_AP_STA เพื่อให้ใช้งาน ESP-NOW และปล่อย Wi-Fi Config ได้พร้อมกัน
-    WiFi.mode(WIFI_AP_STA);
+    WiFi.mode(WIFI_STA);
+
     Serial.print("STA MAC Address: ");
     Serial.println(WiFi.macAddress());
-
-    if (WiFi.softAP(AP_SSID, AP_PASSWORD)) {
-        Serial.println("CONFIG MODE ENABLED");
-        Serial.print("AP IP Address: ");
-        Serial.println(WiFi.softAPIP());
-    } else {
-        Serial.println("SoftAP Failed to Start!");
-    }
-
-    server.on("/",        HTTP_GET,  handleRoot);
-    server.on("/save",    HTTP_POST, handleSave);
-    server.on("/restart", HTTP_POST, handleRestart);
-    server.begin();
 
     if (esp_now_init() != ESP_OK)
     {
@@ -334,7 +414,7 @@ void setup()
 
     xTaskCreatePinnedToCore(
         Task1code, "Task1",
-        10000, NULL, 0, &Task1, 0
+        10000, NULL, 0, &Task1, 1
     );
 
     xTaskCreatePinnedToCore(
@@ -353,13 +433,15 @@ void Task1code(void * pvParameters)
     {
         if (Serial1.available() > 0)
         {
+            rsLedTimer = millis();
+
             digitalWrite(LED_RS, HIGH);
 
             String msg = Serial1.readStringUntil('\r');
-
-            digitalWrite(LED_RS, LOW);
-
+            
             String data_send = "MB1L:" + msg + "\r\n";
+
+            Serial.println(data_send);
 
             if (peerReady)
                 esp_now_send(peerMac,
@@ -383,10 +465,19 @@ void Task1code(void * pvParameters)
             delay(100);
         }
 
-        server.handleClient();
-        
-        // แก้ไขจุดที่ 2: เพิ่ม delay สั้นๆ เพื่อคืนเวลาให้ CPU หลังบ้านจัดการ Wi-Fi
-        delay(10); 
+    if (digitalRead(BTN_CONFIG) == HIGH)
+    {
+        Serial.println("CONFIG BUTTON");
+
+        startConfigMode();
+    }
+
+    if (millis() - rsLedTimer > 100)
+    {
+        digitalWrite(LED_RS, LOW);
+    }
+
+    delay(10);
     }
 }
 
@@ -403,6 +494,10 @@ void Task2code(void * pvParameters)
         while (Serial2.available() > 0)
         {
             gps.encode(Serial2.read());
+
+            digitalWrite(LED_TTL, !digitalRead(LED_TTL));
+
+            gpsLedTimer = millis();
             lastGpsData = millis();
         }
 
@@ -476,6 +571,10 @@ void Task2code(void * pvParameters)
         }
 
         delay(10);
+        if (millis() - gpsLedTimer > 50)
+        {
+            digitalWrite(LED_TTL, LOW);
+        }
     }
 }
 // =====================================================
@@ -485,4 +584,4 @@ void Task2code(void * pvParameters)
 void loop()
 {
     delay(100);
-}
+} 
