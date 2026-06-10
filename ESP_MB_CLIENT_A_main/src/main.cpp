@@ -40,6 +40,7 @@ Preferences prefs;
 
 TaskHandle_t Task1;
 TaskHandle_t Task2;
+TaskHandle_t Task3;
 
 unsigned long lastGpsData = 0;
 unsigned long rsLedTimer  = 0;
@@ -47,6 +48,7 @@ unsigned long gpsLedTimer = 0;
 
 void Task1code(void * pvParameters);
 void Task2code(void * pvParameters);
+void Task3code(void * pvParameters);
 void gps_to_iot();
 
 uint8_t           peerMac[6];
@@ -164,7 +166,7 @@ void loadPeer()
 }
 
 // =====================================================
-// WEB: สร้างหน้าจาก index.html ใน SPIFFS 
+// WEB: สร้างหน้าจาก index.html ใน SPIFFS
 // แทรก THIS MAC และ MASTER MAC ก่อนส่ง
 // =====================================================
 
@@ -275,6 +277,8 @@ void OnDataRecv(const uint8_t *mac,
 
     Serial.print("RECV: ");
     Serial.println(dataIn);
+ 
+    Serial.println("ESP-NOW CALLBACK");
 
     // ตรวจสอบคำสั่ง "gps" (case-insensitive)
     if (dataIn.equalsIgnoreCase("gps"))
@@ -342,7 +346,11 @@ void gps_to_iot()
 
 void startConfigMode()
 {
-    WiFi.mode(WIFI_AP_STA);
+esp_now_deinit();
+
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_AP);
+ // WiFi.mode(WIFI_AP_STA);
 
     WiFi.softAP(AP_SSID, AP_PASSWORD);
 
@@ -373,7 +381,7 @@ void setup()
     pinMode(LED_RS,   OUTPUT);
     pinMode(LED_TTL,  OUTPUT);
     pinMode(LED_POWER, OUTPUT);
-    
+ 
     pinMode(BTN_CONFIG, INPUT_PULLUP);
 
     digitalWrite(LED_wifi, LOW);
@@ -393,7 +401,7 @@ void setup()
         Serial.println("NO MASTER MAC");
 
         startConfigMode();
-    }   
+    }
 
     // แก้ไขจุดที่ 1: เปลี่ยนโหมดเป็น WIFI_AP_STA เพื่อให้ใช้งาน ESP-NOW และปล่อย Wi-Fi Config ได้พร้อมกัน
     WiFi.mode(WIFI_STA);
@@ -421,6 +429,10 @@ void setup()
         Task2code, "Task2",
         10000, NULL, 0, &Task2, 1
     );
+    xTaskCreatePinnedToCore(
+        Task3code, "Task3",
+        3000, NULL, 1, &Task3, 0   // Priority สูงกว่า, Core 0
+    );
 }
 
 // =====================================================
@@ -438,7 +450,7 @@ void Task1code(void * pvParameters)
             digitalWrite(LED_RS, HIGH);
 
             String msg = Serial1.readStringUntil('\r');
-            
+ 
             String data_send = "MB1L:" + msg + "\r\n";
 
             Serial.println(data_send);
@@ -465,12 +477,12 @@ void Task1code(void * pvParameters)
             delay(100);
         }
 
-    if (digitalRead(BTN_CONFIG) == HIGH)
-    {
-        Serial.println("CONFIG BUTTON");
+    // if (digitalRead(BTN_CONFIG) == HIGH)
+    // {
+    //     Serial.println("CONFIG BUTTON");
 
-        startConfigMode();
-    }
+    //     startConfigMode();
+    // }
 
     if (millis() - rsLedTimer > 100)
     {
@@ -555,7 +567,7 @@ void Task2code(void * pvParameters)
 
                     if (gps.time.second() < 10) Serial.print("0");
                     Serial.print(gps.time.second());
-                    
+ 
                     Serial.print(".");
 
                     if (gps.time.centisecond() < 10) Serial.print("0");
@@ -577,6 +589,26 @@ void Task2code(void * pvParameters)
         }
     }
 }
+
+// =====================================================
+// TASK3 - CONFIG BUTTON
+// =====================================================
+
+void Task3code(void * pvParameters)
+{
+    for (;;)
+    {
+        if (digitalRead(BTN_CONFIG) == HIGH)
+        {
+            Serial.println("CONFIG BUTTON");
+
+            startConfigMode();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
 // =====================================================
 // LOOP
 // =====================================================
@@ -584,4 +616,4 @@ void Task2code(void * pvParameters)
 void loop()
 {
     delay(100);
-} 
+}
