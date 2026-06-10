@@ -16,7 +16,7 @@
 #define RXD2 26
 #define TXD2 22
 
-#define BTN_CONFIG 35
+#define BUTTON_PIN 35
 
 const int LED_wifi = 5;
 const int LED_RS   = 19;
@@ -42,6 +42,11 @@ TaskHandle_t Task1;
 TaskHandle_t Task2;
 TaskHandle_t Task3;
 
+int buttonState = LOW;
+int lastButtonState = LOW;
+
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
 unsigned long lastGpsData = 0;
 unsigned long rsLedTimer  = 0;
 unsigned long gpsLedTimer = 0;
@@ -382,7 +387,7 @@ void setup()
     pinMode(LED_TTL,  OUTPUT);
     pinMode(LED_POWER, OUTPUT);
  
-    pinMode(BTN_CONFIG, INPUT_PULLUP);
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     digitalWrite(LED_wifi, LOW);
     digitalWrite(LED_RS,   LOW);
@@ -393,48 +398,68 @@ void setup()
     Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
     Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
 
-    if (!SPIFFS.begin(true))
+    // เปิดSPIFFS ถ้าเปิดไม่ได้จะขึ้น "SPIFFS ERROR"
+    // true = ถ้า mount ไม่ได้จะ format ใหม่อัตโนมัติ
+    if (!SPIFFS.begin(true)) 
+    {
         Serial.println("SPIFFS ERROR");
+    }
 
+    // ตรวจสอบว่ามี MAC Address ของ Master ถูกบันทึกไว้หรือไม่ 
     if (!hasPeerSaved())
     {
         Serial.println("NO MASTER MAC");
 
+    // ถ้ายังไม่มี MAC จะเข้าสู่โหมด Config
+    // เปิด Access Point และ Web Server ให้ผู้ใช้กรอก MAC
         startConfigMode();
     }
-
-    // แก้ไขจุดที่ 1: เปลี่ยนโหมดเป็น WIFI_AP_STA เพื่อให้ใช้งาน ESP-NOW และปล่อย Wi-Fi Config ได้พร้อมกัน
-    WiFi.mode(WIFI_STA);
-
-    Serial.print("STA MAC Address: ");
-    Serial.println(WiFi.macAddress());
-
-    if (esp_now_init() != ESP_OK)
+    else 
     {
-        Serial.println("ESP NOW ERROR");
-        return;
+        // ตั้งค่า ESP32 เป็น Station Mode
+        // ESP-NOW ต้องทำงานใน STA หรือ AP_STA Mode
+        WiFi.mode(WIFI_STA);
+
+        Serial.print("STA MAC Address: ");
+        Serial.println(WiFi.macAddress());
+
+        // เริ่มต้น ESP-NOW
+        // ถ้า init ไม่สำเร็จจะไม่สามารถส่งหรือรับข้อมูลได้
+        if (esp_now_init() != ESP_OK) // เริ่ม ESP-NOW ถ้าเปิด ESP-NOW ไม่สำเร็จ จะออกจาก setup ทันที
+        {
+            Serial.println("ESP NOW ERROR");
+            return;
+        }
+
+        // Register Callback
+        // OnDataSent  = เรียกเมื่อส่งข้อมูลเสร็จ
+        // OnDataRecv  = เรียกเมื่อมีข้อมูลเข้ามา
+        esp_now_register_send_cb(OnDataSent);
+        esp_now_register_recv_cb(OnDataRecv);
+
+        // โหลด MAC ของ Master จาก NVS
+        // และเพิ่มเข้า ESP-NOW Peer List
+        loadPeer(); // โหลด MAC ที่บันทึกไว้ อ่านMACจากPreferences แปลงเป็นByte เพิ่มเข้าPeer 
+
+        // Task1 รับข้อมูลจาก Serial/RS485 แล้วส่งผ่าน ESP-NOW
+        xTaskCreatePinnedToCore(
+            Task1code, "Task1",
+            4096, NULL, 1, &Task1, 1
+        );
+        
+        // Task2 อ่านและ Decode ข้อมูล GPS จาก UART2
+        xTaskCreatePinnedToCore(
+            Task2code, "Task2",
+            4096, NULL, 1, &Task2, 1
+        );
+
+        // Task3 Button
+        xTaskCreatePinnedToCore(
+            Task3code, "Task3",
+            4096, NULL, 2, &Task3, 1 // // Priority สูงกว่าเพื่อให้ตอบสนองการกดปุ่มได้เร็ว
+        );
     }
-
-    esp_now_register_send_cb(OnDataSent);
-    esp_now_register_recv_cb(OnDataRecv);
-
-    loadPeer();
-
-    xTaskCreatePinnedToCore(
-        Task1code, "Task1",
-        10000, NULL, 0, &Task1, 1
-    );
-
-    xTaskCreatePinnedToCore(
-        Task2code, "Task2",
-        10000, NULL, 0, &Task2, 1
-    );
-    xTaskCreatePinnedToCore(
-        Task3code, "Task3",
-        3000, NULL, 1, &Task3, 0   // Priority สูงกว่า, Core 0
-    );
 }
-
 // =====================================================
 // TASK1 - Serial Relay -> ESP-NOW
 // =====================================================
@@ -477,12 +502,6 @@ void Task1code(void * pvParameters)
             delay(100);
         }
 
-    // if (digitalRead(BTN_CONFIG) == HIGH)
-    // {
-    //     Serial.println("CONFIG BUTTON");
-
-    //     startConfigMode();
-    // }
 
     if (millis() - rsLedTimer > 100)
     {
@@ -598,14 +617,35 @@ void Task3code(void * pvParameters)
 {
     for (;;)
     {
-        if (digitalRead(BTN_CONFIG) == HIGH)
-        {
-            Serial.println("CONFIG BUTTON");
+        int reading = digitalRead(BUTTON_PIN);
 
-            startConfigMode();
+        // ตรวจจับการเปลี่ยนสถานะ
+        if (reading != lastButtonState)
+        {
+            lastDebounceTime = millis();
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20));
+        // รอให้สัญญาณนิ่ง
+        if ((millis() - lastDebounceTime) > debounceDelay)
+        {
+            if (reading != buttonState)
+            {
+                buttonState = reading;
+
+                // INPUT_PULLUP
+                // กด = LOW
+                if (buttonState == HIGH)
+                {
+                    Serial.println("CONFIG BUTTON");
+
+                    startConfigMode();
+                }
+            }
+        }
+
+        lastButtonState = reading;
+
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
