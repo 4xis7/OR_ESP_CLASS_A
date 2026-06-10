@@ -199,6 +199,9 @@ void handleRoot()
     server.send(200, "text/html", html);
 }
 
+// =====================================================
+// WEB HANDLER: บันทึกข้อมูล (แก้ไขใหม่เรียบร้อย)
+// =====================================================
 void handleSave()
 {
     if (!server.hasArg("mac"))
@@ -213,25 +216,32 @@ void handleSave()
 
     if (!isValidMac(mac))
     {
-        server.send(200, "text/html",
-            "<p>Invalid MAC Format</p>"
-            "<a href='/'>Back</a>");
+        String errorHtml = "<html><meta charset='UTF-8'><body style='font-family:sans-serif; text-align:center; padding-top:50px;'>";
+        errorHtml += "<h2 style='color:red;'>ERROR: รูปแบบ MAC Address ไม่ถูกต้อง!</h2>";
+        errorHtml += "<p>กรุณากรอกในรูปแบบ XX:XX:XX:XX:XX:XX</p>";
+        errorHtml += "<br><a href='/' style='padding:10px 20px; background:#ccc; text-decoration:none; color:black; border-radius:5px;'>กลับไปแก้ไข</a>";
+        errorHtml += "</body></html>";
+        server.send(200, "text/html", errorHtml);
         return;
     }
 
     prefs.begin("config", false);
-    prefs.putString("peer", mac);
+    prefs.putString("peer", mac);      
     prefs.end();
 
     Serial.println("MAC SAVED: " + mac);
 
-    server.send(200,
-                "text/html",
-                "<h2>MAC SAVED</h2>"
-                "<p>Restarting...</p>");
+    String successHtml = "<html><meta charset='UTF-8'><body style='font-family:sans-serif; text-align:center; padding-top:50px;'>";
+    successHtml += "<div style='display:inline-block; border:2px solid #4CAF50; padding:30px; border-radius:10px; background-color:#f9f9f9;'>";
+    successHtml += "<h2 style='color:#4CAF50;'>✓ บันทึกข้อมูลเรียบร้อยแล้ว!</h2>";
+    successHtml += "<p style='font-size:18px;'>บันทึกค่าใหม่เป็น: <b>" + mac + "</b> สำเร็จ</p>";
+    successHtml += "<p style='color:#666;'>กำลังเตรียมรีสตาร์ทบอร์ดเพื่อเข้าโหมดทำงานปกติ...</p>";
+    successHtml += "</div>";
+    successHtml += "</body></html>";
 
-    delay(1000);
+    server.send(200, "text/html", successHtml);
 
+    delay(3000);   
     ESP.restart();
 }
 
@@ -263,10 +273,6 @@ void OnDataSent(const uint8_t *mac_addr,
 
 // =====================================================
 // ESP-NOW RECEIVE CALLBACK
-// =====================================================
-
-// =====================================================
-// ESP-NOW RECEIVE CALLBACK  (แก้ไข)
 // =====================================================
 
 void OnDataRecv(const uint8_t *mac,
@@ -312,6 +318,7 @@ void OnDataRecv(const uint8_t *mac,
         Serial.flush();
     }
 }
+
 // =====================================================
 // GPS -> ส่ง ESP-NOW
 // =====================================================
@@ -345,17 +352,17 @@ void gps_to_iot()
 
     delay(100);
 }
+
 // =====================================================
 // button_Web Config
 // =====================================================
 
 void startConfigMode()
 {
-esp_now_deinit();
+    esp_now_deinit();
 
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
- // WiFi.mode(WIFI_AP_STA);
 
     WiFi.softAP(AP_SSID, AP_PASSWORD);
 
@@ -398,68 +405,51 @@ void setup()
     Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
     Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
 
-    // เปิดSPIFFS ถ้าเปิดไม่ได้จะขึ้น "SPIFFS ERROR"
-    // true = ถ้า mount ไม่ได้จะ format ใหม่อัตโนมัติ
     if (!SPIFFS.begin(true)) 
     {
         Serial.println("SPIFFS ERROR");
     }
 
-    // ตรวจสอบว่ามี MAC Address ของ Master ถูกบันทึกไว้หรือไม่ 
     if (!hasPeerSaved())
     {
         Serial.println("NO MASTER MAC");
-
-    // ถ้ายังไม่มี MAC จะเข้าสู่โหมด Config
-    // เปิด Access Point และ Web Server ให้ผู้ใช้กรอก MAC
         startConfigMode();
     }
     else 
     {
-        // ตั้งค่า ESP32 เป็น Station Mode
-        // ESP-NOW ต้องทำงานใน STA หรือ AP_STA Mode
         WiFi.mode(WIFI_STA);
 
         Serial.print("STA MAC Address: ");
         Serial.println(WiFi.macAddress());
 
-        // เริ่มต้น ESP-NOW
-        // ถ้า init ไม่สำเร็จจะไม่สามารถส่งหรือรับข้อมูลได้
-        if (esp_now_init() != ESP_OK) // เริ่ม ESP-NOW ถ้าเปิด ESP-NOW ไม่สำเร็จ จะออกจาก setup ทันที
+        if (esp_now_init() != ESP_OK)
         {
             Serial.println("ESP NOW ERROR");
             return;
         }
 
-        // Register Callback
-        // OnDataSent  = เรียกเมื่อส่งข้อมูลเสร็จ
-        // OnDataRecv  = เรียกเมื่อมีข้อมูลเข้ามา
         esp_now_register_send_cb(OnDataSent);
         esp_now_register_recv_cb(OnDataRecv);
 
-        // โหลด MAC ของ Master จาก NVS
-        // และเพิ่มเข้า ESP-NOW Peer List
-        loadPeer(); // โหลด MAC ที่บันทึกไว้ อ่านMACจากPreferences แปลงเป็นByte เพิ่มเข้าPeer 
+        loadPeer();
 
-        // Task1 รับข้อมูลจาก Serial/RS485 แล้วส่งผ่าน ESP-NOW
         xTaskCreatePinnedToCore(
             Task1code, "Task1",
             4096, NULL, 1, &Task1, 1
         );
         
-        // Task2 อ่านและ Decode ข้อมูล GPS จาก UART2
         xTaskCreatePinnedToCore(
             Task2code, "Task2",
             4096, NULL, 1, &Task2, 1
         );
 
-        // Task3 Button
         xTaskCreatePinnedToCore(
             Task3code, "Task3",
-            4096, NULL, 2, &Task3, 1 // // Priority สูงกว่าเพื่อให้ตอบสนองการกดปุ่มได้เร็ว
+            4096, NULL, 2, &Task3, 1
         );
     }
 }
+
 // =====================================================
 // TASK1 - Serial Relay -> ESP-NOW
 // =====================================================
@@ -471,11 +461,9 @@ void Task1code(void * pvParameters)
         if (Serial1.available() > 0)
         {
             rsLedTimer = millis();
-
             digitalWrite(LED_RS, HIGH);
 
             String msg = Serial1.readStringUntil('\r');
- 
             String data_send = "MB1L:" + msg + "\r\n";
 
             Serial.println(data_send);
@@ -491,7 +479,6 @@ void Task1code(void * pvParameters)
         if (Serial.available() > 0)
         {
             String msgWire = Serial.readStringUntil('\r');
-
             String data_send = "MB1L:" + msgWire + "\r\n";
 
             if (peerReady)
@@ -502,13 +489,12 @@ void Task1code(void * pvParameters)
             delay(100);
         }
 
+        if (millis() - rsLedTimer > 100)
+        {
+            digitalWrite(LED_RS, LOW);
+        }
 
-    if (millis() - rsLedTimer > 100)
-    {
-        digitalWrite(LED_RS, LOW);
-    }
-
-    delay(10);
+        delay(10);
     }
 }
 
@@ -525,7 +511,6 @@ void Task2code(void * pvParameters)
         while (Serial2.available() > 0)
         {
             gps.encode(Serial2.read());
-
             digitalWrite(LED_TTL, !digitalRead(LED_TTL));
 
             gpsLedTimer = millis();
@@ -564,29 +549,21 @@ void Task2code(void * pvParameters)
                     Serial.print(gps.date.month());
                     Serial.print("/");
                     Serial.print(gps.date.year());
-
                     Serial.print(" ");
 
                     int thaiHour = gps.time.hour() + 7;
-
-                    if (thaiHour >= 24)
-                    {
-                        thaiHour -= 24;
-                    }
+                    if (thaiHour >= 24) thaiHour -= 24;
 
                     if (thaiHour < 10) Serial.print("0");
                     Serial.print(thaiHour);
-
                     Serial.print(":");
 
                     if (gps.time.minute() < 10) Serial.print("0");
                     Serial.print(gps.time.minute());
-
                     Serial.print(":");
 
                     if (gps.time.second() < 10) Serial.print("0");
                     Serial.print(gps.time.second());
- 
                     Serial.print(".");
 
                     if (gps.time.centisecond() < 10) Serial.print("0");
@@ -619,31 +596,27 @@ void Task3code(void * pvParameters)
     {
         int reading = digitalRead(BUTTON_PIN);
 
-        // ตรวจจับการเปลี่ยนสถานะ
         if (reading != lastButtonState)
         {
             lastDebounceTime = millis();
         }
 
-        // รอให้สัญญาณนิ่ง
         if ((millis() - lastDebounceTime) > debounceDelay)
         {
             if (reading != buttonState)
             {
                 buttonState = reading;
 
-                // INPUT_PULLUP
+                // ตรวจจับการกดปุ่ม (Active LOW -> HIGH ตามเงื่อนไขเดิมของคุณ)
                 if (buttonState == HIGH)
                 {
                     Serial.println("CONFIG BUTTON");
-
                     startConfigMode();
                 }
             }
         }
 
         lastButtonState = reading;
-
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
