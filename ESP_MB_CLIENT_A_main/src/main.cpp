@@ -633,7 +633,6 @@ void Task3code(void * pvParameters)
                 buttonState = reading;
 
                 // INPUT_PULLUP
-                // กด = LOW
                 if (buttonState == HIGH)
                 {
                     Serial.println("CONFIG BUTTON");
