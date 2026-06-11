@@ -604,7 +604,7 @@ void Task3code(void * pvParameters)
             {
                 buttonState = reading;
 
-                // ตรวจจับการกดปุ่ม (Active LOW -> HIGH ตามเงื่อนไขเดิมของคุณ)
+                // ตรวจจับการกดปุ่ม (Active LOW -> HIGH)
                 if (buttonState == HIGH)
                 {
                     Serial.println("CONFIG BUTTON");
