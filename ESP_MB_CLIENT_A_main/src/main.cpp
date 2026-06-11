@@ -245,12 +245,6 @@ void handleSave()
     ESP.restart();
 }
 
-void handleRestart()
-{
-    server.send(200, "text/plain", "RESTARTING");
-    delay(1000);
-    ESP.restart();
-}
 
 // =====================================================
 // ESP-NOW SEND CALLBACK
