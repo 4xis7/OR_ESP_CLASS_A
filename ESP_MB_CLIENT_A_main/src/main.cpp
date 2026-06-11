@@ -121,7 +121,11 @@ bool macStringToBytes(String macStr, uint8_t *mac)
 
 bool hasPeerSaved()
 {
-    prefs.begin("config", true);
+    if (!prefs.begin("config", true))
+    {
+        Serial.println("NVS OPEN FAIL");
+        return false;
+    }
 
     String macStr = prefs.getString("peer", "");
 
@@ -136,6 +140,7 @@ bool hasPeerSaved()
 
 void loadPeer()
 {
+    Serial.println("Hello");
     prefs.begin("config", true);
     String macStr = prefs.getString("peer", "");
     prefs.end();
@@ -353,9 +358,7 @@ void gps_to_iot()
 
 void startConfigMode()
 {
-    esp_now_deinit();
 
-    WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
 
     WiFi.softAP(AP_SSID, AP_PASSWORD);
@@ -407,6 +410,7 @@ void setup()
     {
         Serial.println("NO MASTER MAC");
         startConfigMode();
+        Serial.println("NO_MAC");
     }
     else 
     {
