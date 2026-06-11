@@ -245,6 +245,12 @@ void handleSave()
     ESP.restart();
 }
 
+// void handleRestart()
+// {
+//     server.send(200, "text/plain", "RESTARTING");
+//     delay(1000);
+//     ESP.restart();
+// }
 
 // =====================================================
 // ESP-NOW SEND CALLBACK
@@ -366,7 +372,7 @@ void startConfigMode()
 
     server.on("/", HTTP_GET, handleRoot);
     server.on("/save", HTTP_POST, handleSave);
-    server.on("/restart", HTTP_POST, handleRestart);
+    // server.on("/restart", HTTP_POST, handleRestart);
 
     server.begin();
 
