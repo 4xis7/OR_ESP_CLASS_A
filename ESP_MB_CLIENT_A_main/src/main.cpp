@@ -358,7 +358,9 @@ void gps_to_iot()
 
 void startConfigMode()
 {
+    // esp_now_deinit();
 
+   // WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
 
     WiFi.softAP(AP_SSID, AP_PASSWORD);
@@ -372,11 +374,11 @@ void startConfigMode()
    
     server.begin();
 
-    while (true)
-    {
-        server.handleClient();
-        delay(10);
-    }
+    // while (true)
+    // {
+    //     server.handleClient();
+    //     delay(10);
+    // }
 }
 
 // =====================================================
@@ -604,7 +606,7 @@ void Task3code(void * pvParameters)
             {
                 buttonState = reading;
 
-                // ตรวจจับการกดปุ่ม (Active LOW -> HIGH)
+                // ตรวจจับการกดปุ่ม (Active LOW -> HIGH ตามเงื่อนไขเดิมของคุณ)
                 if (buttonState == HIGH)
                 {
                     Serial.println("CONFIG BUTTON");
@@ -624,5 +626,6 @@ void Task3code(void * pvParameters)
 
 void loop()
 {
-    delay(100);
+    server.handleClient();
+    delay(1);
 }
